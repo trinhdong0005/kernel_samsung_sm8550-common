@@ -58,6 +58,11 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/filemap.h>
 
+#undef CREATE_TRACE_POINTS
+#ifndef __GENKSYMS__
+#include <trace/hooks/mm.h>
+#endif
+
 /*
  * FIXME: remove all knowledge of the buffer layer from the core VM
  */
@@ -1919,6 +1924,9 @@ repeat:
 			return page;
 		page = NULL;
 	}
+
+	trace_android_vh_pagecache_get_page(mapping, index, fgp_flags,
+					gfp_mask, page);
 	if (!page)
 		goto no_page;
 
@@ -2568,6 +2576,9 @@ retry:
 
 	filemap_get_read_batch(mapping, index, last_index - 1, pvec);
 	if (!pagevec_count(pvec)) {
+		trace_android_vh_page_cache_miss(filp, index,
+				(iter->count + PAGE_SIZE-1) >> PAGE_SHIFT,
+				index, true);
 		if (iocb->ki_flags & IOCB_NOIO)
 			return -EAGAIN;
 		page_cache_sync_readahead(mapping, ra, filp, index,
@@ -2645,8 +2656,9 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 	if (unlikely(!iov_iter_count(iter)))
 		return 0;
 
-	iov_iter_truncate(iter, inode->i_sb->s_maxbytes);
+	iov_iter_truncate(iter, inode->i_sb->s_maxbytes - iocb->ki_pos);
 	pagevec_init(&pvec);
+	trace_android_vh_filemap_read(filp, iocb->ki_pos, iov_iter_count(iter));
 
 #ifdef CONFIG_PAGE_BOOST_RECORDING
 	index = *ppos >> PAGE_SHIFT;
@@ -2852,7 +2864,7 @@ static inline loff_t page_seek_hole_data(struct xa_state *xas,
 	do {
 		if (ops->is_partially_uptodate(page, offset, bsz) == seek_data)
 			break;
-		start = (start + bsz) & ~(bsz - 1);
+		start = (start + bsz) & ~((u64)bsz - 1);
 		offset += bsz;
 	} while (offset < thp_size(page));
 unlock:
@@ -3211,6 +3223,7 @@ page_put:
 			mapping_locked = true;
 		}
 	} else {
+		trace_android_vh_page_cache_miss(file, offset, 1, offset, false);
 		/* No page in the page cache at all */
 		count_vm_event(PGMAJFAULT);
 		count_memcg_event_mm(vmf->vma->vm_mm, PGMAJFAULT);
@@ -3235,6 +3248,8 @@ retry_find:
 			return VM_FAULT_OOM;
 		}
 	}
+
+	trace_android_vh_filemap_fault_pre_page_locked(page);
 
 	if (!lock_page_maybe_drop_mmap(vmf, page, &fpin))
 		goto out_retry;
@@ -3444,11 +3459,13 @@ vm_fault_t filemap_map_pages(struct vm_fault *vmf,
 #ifdef CONFIG_PAGE_BOOST_RECORDING
 	pgoff_t head_pgoff = 0;
 #endif
+	pgoff_t first_pgoff = 0;
 
 	/* filemap_map_pages() is called within an rcu read lock already. */
 	head = first_map_page(mapping, &xas, end_pgoff);
 	if (!head)
 		return ret;
+	first_pgoff = xas.xa_index;
 
 #ifdef CONFIG_PAGE_BOOST_RECORDING
 	head_pgoff = xas.xa_index;
@@ -3477,6 +3494,7 @@ vm_fault_t filemap_map_pages(struct vm_fault *vmf,
 		addr += (xas.xa_index - last_pgoff) << PAGE_SHIFT;
 		vmf->pte += xas.xa_index - last_pgoff;
 		last_pgoff = xas.xa_index;
+		trace_android_vh_filemap_pages(page);
 
 		if (!pte_none(*vmf->pte))
 			goto unlock;
@@ -3492,11 +3510,13 @@ vm_fault_t filemap_map_pages(struct vm_fault *vmf,
 		continue;
 unlock:
 		unlock_page(head);
+		trace_android_vh_filemap_page_mapped(head);
 		put_page(head);
 	} while ((head = next_map_page(mapping, &xas, end_pgoff)) != NULL);
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 	vmf->pte = NULL;
 	WRITE_ONCE(file->f_ra.mmap_miss, mmap_miss);
+	trace_android_vh_filemap_map_pages(file, first_pgoff, last_pgoff, ret);
 
 #ifdef CONFIG_PAGE_BOOST_RECORDING
 	/* end_pgoff is inclusive */
@@ -3950,6 +3970,7 @@ again:
 			if (unlikely(status < 0))
 				break;
 		}
+		trace_android_vh_io_statistics(mapping, page->index, 1, false, false);
 		cond_resched();
 
 		if (unlikely(status == 0)) {

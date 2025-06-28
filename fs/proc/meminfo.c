@@ -61,6 +61,9 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	cached = global_node_page_state(NR_FILE_PAGES) -
 			total_swapcache_pages() - i.bufferram;
 
+	trace_android_vh_meminfo_cache_adjust(&cached);
+
+
 #ifdef CONFIG_RBIN
 	rbin_oem_func(GET_RBIN_STATS, stats);
 	cached += stats[RBIN_CACHED];
