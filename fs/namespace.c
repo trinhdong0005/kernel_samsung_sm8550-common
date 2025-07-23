@@ -2726,14 +2726,6 @@ static int attach_recursive_mnt(struct mount *source_mnt,
 	hlist_for_each_entry_safe(child, n, &tree_list, mnt_hash) {
 		struct mount *q;
 		hlist_del_init(&child->mnt_hash);
-#ifdef CONFIG_KDP_NS
-		q = __lookup_mnt(((struct kdp_mount *)child->mnt_parent)->mnt,
-#else
-		q = __lookup_mnt(&child->mnt_parent->mnt,
-#endif
-				 child->mnt_mountpoint);
-		if (q)
-			mnt_change_mountpoint(child, smp, q);
 		/* Notice when we are propagating across user namespaces */
 		if (child->mnt_parent->mnt_ns->user_ns != user_ns)
 			lock_mnt_tree(child);
@@ -2743,6 +2735,14 @@ static int attach_recursive_mnt(struct mount *source_mnt,
 #else
 		child->mnt.mnt_flags &= ~MNT_LOCKED;
 #endif
+#ifdef CONFIG_KDP_NS
+		q = __lookup_mnt(((struct kdp_mount *)child->mnt_parent)->mnt,
+#else
+		q = __lookup_mnt(&child->mnt_parent->mnt,
+#endif
+				 child->mnt_mountpoint);
+		if (q)
+			mnt_change_mountpoint(child, smp, q);
 		commit_tree(child);
 	}
 	put_mountpoint(smp);
@@ -2865,6 +2865,10 @@ static int do_change_type(struct path *path, int ms_flags)
 		return -EINVAL;
 
 	namespace_lock();
+	if (!check_mnt(mnt)) {
+		err = -EINVAL;
+		goto out_unlock;
+	}
 	if (type == MS_SHARED) {
 		err = invent_group_ids(mnt, recurse);
 		if (err)
@@ -3397,7 +3401,7 @@ static int do_set_group(struct path *from_path, struct path *to_path)
 	if (IS_MNT_SLAVE(from)) {
 		struct mount *m = from->mnt_master;
 
-		list_add(&to->mnt_slave, &m->mnt_slave_list);
+		list_add(&to->mnt_slave, &from->mnt_slave);
 		to->mnt_master = m;
 	}
 
