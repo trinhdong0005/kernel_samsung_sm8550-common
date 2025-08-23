@@ -246,6 +246,7 @@ static int alarmtimer_suspend(struct device *dev)
 	struct rtc_device *rtc;
 	unsigned long flags;
 	struct rtc_time tm;
+	struct alarm *min_alarm = NULL;
 
 	spin_lock_irqsave(&freezer_delta_lock, flags);
 	min = freezer_delta;
@@ -275,12 +276,20 @@ static int alarmtimer_suspend(struct device *dev)
 			expires = next->expires;
 			min = delta;
 			type = i;
+			min_alarm = container_of(next, struct alarm, node);
 		}
 	}
 	if (min == 0)
 		return 0;
 
+	if (min_alarm)
+		pr_info("soonest alarm : %ps\n", min_alarm->function);
+
 	if (ktime_to_ns(min) < 2 * NSEC_PER_SEC) {
+		if (min_alarm) {
+			pr_info("alarmtimer suspending blocked by %ps\n", min_alarm->function);
+		}
+
 		pm_wakeup_event(dev, 2 * MSEC_PER_SEC);
 		return -EBUSY;
 	}
